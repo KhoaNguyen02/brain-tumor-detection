@@ -1,12 +1,12 @@
 import cv2
-import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 
 def predict(model, image, device):
-    """Get prediction of a single image using a trained model.
+    """Get prediction and confidence level of a single image using a trained model.
 
     Parameters
     ----------
@@ -19,18 +19,20 @@ def predict(model, image, device):
 
     Returns
     -------
-    str
-        Prediction for the image
+    tuple
+        Prediction for the image and confidence level in percentage
     """
     model.eval()
     with torch.no_grad():
         image = next(iter(image)).to(device)
         output = model(image)
-        _, prediction = torch.max(output.data, 1)
+        probabilities = F.softmax(output, dim=1)
+        confidence, prediction = torch.max(probabilities, 1)
+        confidence = confidence.item() * 100  # Convert to percentage
         prediction = prediction.item()
 
     pred_dict = {0: 'Normal', 1: 'Glioma', 2: 'Meningioma', 3: 'Pituitary'}
-    return pred_dict[prediction]
+    return pred_dict[prediction], confidence
 
 def clear_hooks(layer):
     """Clears all hooks from a layer. Useful when reusing a model for inference.
