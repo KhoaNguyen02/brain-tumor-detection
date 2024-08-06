@@ -183,7 +183,6 @@ class BrainTumorDataset(Dataset):
         label = self.labels[idx]
         label = self.label_dict[label]
 
-        image = crop_image(image)
         if self.transform:
             image = self.transform(image)
 
