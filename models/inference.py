@@ -6,7 +6,7 @@ import torch.nn.functional as F
 
 
 def predict(model, image, device):
-    """Get prediction and confidence levels of a single image using a trained model.
+    """Get prediction and confidence level of a single image using a trained model.
 
     Parameters
     ----------
@@ -19,15 +19,13 @@ def predict(model, image, device):
 
     Returns
     -------
-    dict
-        Dictionary containing predictions for each class and their confidence levels in percentage
     tuple
         Prediction for the image and confidence level in percentage
     """
     model.eval()
     with torch.no_grad():
-        image = image.to(device)
-        output = model(image.unsqueeze(0))  # Add batch dimension
+        image = next(iter(image)).to(device)
+        output = model(image)
         probabilities = F.softmax(output, dim=1).cpu().numpy().flatten()
 
     pred_dict = {0: 'Normal', 1: 'Glioma', 2: 'Meningioma', 3: 'Pituitary'}
@@ -36,10 +34,11 @@ def predict(model, image, device):
     class_probabilities = {pred_dict[i]: prob *100 for i, prob in enumerate(probabilities)}
 
     # Get the highest confidence prediction
-    pred = max(class_probabilities, key=class_probabilities.get)
-    confidence = class_probabilities[pred]
+    max_class = max(class_probabilities, key=class_probabilities.get)
+    max_confidence = class_probabilities[max_class]
 
-    return pred, confidence
+    return max_class, max_confidence
+
 
 def clear_hooks(layer):
     """Clears all hooks from a layer. Useful when reusing a model for inference.
