@@ -61,10 +61,8 @@ def register_hooks(model):
     # find the last convolutional layer in the model
     last_conv_layer = None
     for layer in model.layers:
-        if isinstance(layer, nn.Sequential):
-            for sub_layer in layer:
-                if isinstance(sub_layer, nn.Conv2d):
-                    last_conv_layer = sub_layer
+        if isinstance(layer, nn.Conv2d):
+            last_conv_layer = layer
 
     if last_conv_layer is not None:
         # Register the full backward hook
