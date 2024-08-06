@@ -36,10 +36,6 @@ def main():
         # Get prediction and confidence
         prediction, confidence = predict(model, image, device)
 
-        # Display the results
-        st.write(f"Prediction: {prediction}")
-        st.write(f"Confidence: {confidence:.2f}%")
-
         # Generate and display the heatmap
         input_img = next(iter(image))[0].unsqueeze(0).to(device)
 
@@ -69,6 +65,9 @@ def main():
         with col2:
             st.image(heatmap_path, caption="Activation Map", use_column_width=True)
 
+        # Display the prediction and confidence
+        st.write(f"Condition: {prediction}")
+        st.write(f"Confidence: {confidence:.3f}")
 
 if __name__ == "__main__":
     main()
