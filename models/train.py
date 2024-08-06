@@ -1,15 +1,12 @@
 import time
 
-import numpy as np
 import pandas as pd
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
 from tqdm import tqdm
 
 
-def train_model(model, train_loader, val_loader, test_loader, device, criterion, optimizer, 
-                scheduler=None, n_epochs=10, max_epochs_stop=3):
+def train_model(model, train_loader, val_loader, test_loader, device, criterion,
+                optimizer, n_epochs=10, scheduler=None, early_stopping=None):
     """Train a PyTorch model using the given data loaders.
 
     Parameters
@@ -32,8 +29,8 @@ def train_model(model, train_loader, val_loader, test_loader, device, criterion,
         Learning rate scheduler (used for learning rate decay), by default None
     n_epochs : int, optional
         Number of epochs to train the model, by default 10
-    max_epochs_stop : int, optional
-        Maximum number of epochs to wait for the validation loss to improve, by default 3
+    early_stopping : EarlyStopping, optional
+        Early stopping mechanism, by default None
 
     Returns
     -------
@@ -41,10 +38,6 @@ def train_model(model, train_loader, val_loader, test_loader, device, criterion,
         Trained model, training history, test accuracy, best epoch
     """
 
-    # Early stopping initialization
-    epochs_no_improve = 0
-    min_val_loss = np.Inf
-    max_val_acc = 0
     history = []
 
     for epoch in range(n_epochs):
@@ -73,7 +66,8 @@ def train_model(model, train_loader, val_loader, test_loader, device, criterion,
                 train_acc += accuracy.item() * images.size(0)
 
                 # Update the progress bar
-                pbar.set_postfix({'loss': loss.item(), 'accuracy': accuracy.item()})
+                pbar.set_postfix(
+                    {'loss': loss.item(), 'accuracy': accuracy.item()})
                 pbar.update()
 
         elapsed_time = time.time() - start_time
@@ -102,34 +96,30 @@ def train_model(model, train_loader, val_loader, test_loader, device, criterion,
             history.append([train_loss, val_loss, train_acc, val_acc])
 
             # Epoch summary
-            tqdm.write(f'{len(train_loader)}/{len(train_loader)} [==============================] - {elapsed_time:.0f}s {1000*elapsed_time/len(train_loader):.0f}ms/step - loss: {train_loss:.4f} - accuracy: {train_acc:.4f} - val_loss: {val_loss:.4f} - val_accuracy: {val_acc:.4f}')
+            tqdm.write(
+                f'{len(train_loader)}/{len(train_loader)} [==============================] - {elapsed_time:.0f}s {1000*elapsed_time/len(train_loader):.0f}ms/step - loss: {train_loss:.4f} - accuracy: {train_acc:.4f} - val_loss: {val_loss:.4f} - val_accuracy: {val_acc:.4f}')
 
             # Perform early stopping
-            if val_loss < min_val_loss:
-                epochs_no_improve = 0
-                min_val_loss = val_loss
-                max_val_acc = val_acc
-                best_model = model
-            else:
-                epochs_no_improve += 1
-                # Check early stopping condition
-                if epochs_no_improve == max_epochs_stop:
-                    best_epoch = epoch - max_epochs_stop + 1
-                    tqdm.write(f'\nEarly Stopping! Total epochs: {epoch + 1}. Best epoch: {best_epoch} with val loss: {min_val_loss:.2f} and val accuracy: {100 * max_val_acc:.2f}%')
-                    model.load_state_dict(best_model.state_dict())
-                    model.optimizer = optimizer
-                    history = pd.DataFrame(history, columns=['train_loss', 'val_loss', 'train_acc', 'val_acc'])
+            if early_stopping:
+                early_stopping(val_loss, model, epoch)
+                if early_stopping.early_stop:
+                    tqdm.write(
+                        f'\nEarly Stopping! Total epochs: {epoch + 1}. Best epoch: {early_stopping.best_epoch + 1} with val loss: {val_loss:.2f} and val accuracy: {100 * val_acc:.2f}%')
+                    early_stopping.load_best_model(model)
+                    history = pd.DataFrame(
+                        history, columns=['train_loss', 'val_loss', 'train_acc', 'val_acc'])
                     test_acc = eval_model(model, test_loader, device)
-                    return model, history, test_acc, best_epoch
+                    return model, history, test_acc
 
         if scheduler is not None:
             scheduler.step(val_loss)
 
-    model.optimizer = optimizer
-    history = pd.DataFrame(history, columns=['train_loss', 'val_loss', 'train_acc', 'val_acc'])
+    history = pd.DataFrame(
+        history, columns=['train_loss', 'val_loss', 'train_acc', 'val_acc'])
     test_acc = eval_model(model, test_loader, device)
 
-    return model, history, test_acc, epoch
+    return model, history, test_acc
+
 
 def eval_model(model, test_loader, device):
     """Evaluate a PyTorch model using the given data loader.
@@ -162,3 +152,34 @@ def eval_model(model, test_loader, device):
     test_acc = test_acc / len(test_loader.dataset)
 
     return test_acc
+
+
+class EarlyStopping:
+    def __init__(self, patience=3, min_delta=0):
+        self.patience = patience
+        self.min_delta = min_delta
+        self.best_score = None
+        self.epochs_no_improve = 0
+        self.early_stop = False
+        self.best_model = None
+        self.best_epoch = 0  # Store the epoch at which the best model is found
+
+    def __call__(self, val_loss, model, epoch):
+        score = -val_loss
+
+        if self.best_score is None:
+            self.best_score = score
+            self.best_model = model.state_dict()
+            self.best_epoch = epoch
+        elif score < self.best_score + self.min_delta:
+            self.epochs_no_improve += 1
+            if self.epochs_no_improve >= self.patience:
+                self.early_stop = True
+        else:
+            self.best_score = score
+            self.best_model = model.state_dict()
+            self.epochs_no_improve = 0
+            self.best_epoch = epoch
+
+    def load_best_model(self, model):
+        model.load_state_dict(self.best_model)
