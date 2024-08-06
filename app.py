@@ -30,7 +30,7 @@ def main():
         image = load_single_img("temp/uploaded_img.jpg",transform)
 
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        model = CvT(num_classes=4).to(device)
+        model = CNN(num_classes=4).to(device)
         model.load_state_dict(torch.load(MODEL, map_location=device))
 
         # Get prediction and confidence
