@@ -189,7 +189,7 @@ class BrainTumorDataset(Dataset):
         image.permute(2, 0, 1)
 
         return image.to(self.device), torch.tensor(label).to(self.device)
-    
+
 
 def load_single_img(path, transform, size=(256, 256)):
     """Load a single image from path
@@ -212,7 +212,6 @@ def load_single_img(path, transform, size=(256, 256)):
     img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
     img = cv2.resize(img, size)
 
-    img = crop_image(img)
     img = transform(img)
     img = img.unsqueeze(0)
 
