@@ -1,7 +1,6 @@
 import cv2
 import numpy as np
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 
 
@@ -39,43 +38,6 @@ def predict(model, image, device):
 
     return max_class, max_confidence
 
-
-def clear_hooks(layer):
-    """Clears all hooks from a layer. Useful when reusing a model for inference.
-
-    Parameters
-    ----------
-    layer : torch.nn.Module
-        Layer to clear hooks from.
-    """
-    if hasattr(layer, '_backward_hooks'):
-        layer._backward_hooks.clear()
-    if hasattr(layer, '_full_backward_hooks'):
-        layer._full_backward_hooks.clear()
-
-def register_hooks(model):
-    """Registers a full backward hook on the last convolutional layer of a model. Useful for Grad-CAM.
-
-    Parameters
-    ----------
-    model : torch.nn.Module
-        Model to register the hook on
-    """
-    def hook_function(module, grad_in, grad_out):
-        model.gradients = grad_out[0]
-
-    # find the last convolutional layer in the model
-    last_conv_layer = None
-    for layer in model.layers:
-        if isinstance(layer, nn.Conv2d):
-            last_conv_layer = layer
-
-    if last_conv_layer is not None:
-        # Register the full backward hook
-        last_conv_layer.register_full_backward_hook(hook_function)
-    else:
-        raise ValueError("No Conv2d layer found in the model")
-
 def generate_cam(model, input_data):
     """Generates class activation maps (CAM) for a given model and input data.
 
@@ -94,11 +56,11 @@ def generate_cam(model, input_data):
 
     def process_single_image(image):
         model.eval()
-        pred = model(image)
+        pred = model(image, inference=True)
         cls = pred.argmax(dim=1)
 
         pred[:, cls].backward()
-        gradients = model.get_activations_gradient()
+        gradients = model.get_gradient()
         pooled_gradients = torch.mean(gradients, dim=[0, 2, 3])
         activations = model.get_activations(image).detach()
 
