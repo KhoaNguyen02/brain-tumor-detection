@@ -4,16 +4,20 @@ from models import *
 from preprocessing import *
 from torchvision import transforms
 
-MODEL = "pretrained/model.pth"
+MODEL = "pretrained/model_densenet.pth"
 
 def main():
+
     transform = transforms.Compose([
         transforms.ToPILImage(),
-        transforms.Resize((224, 224)),
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[
                             0.229, 0.224, 0.225])
     ])
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = DenseNet121(num_classes=4).to(device)
+    model.load_state_dict(torch.load(MODEL, map_location=device))
 
     # Streamlit app
     st.title("Brain Tumor Classifier")
@@ -29,21 +33,11 @@ def main():
         # Load and transform the image
         image = load_single_img("temp/uploaded_img.jpg",transform)
 
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        model = CNN(num_classes=4).to(device)
-        model.load_state_dict(torch.load(MODEL, map_location=device))
-
         # Get prediction and confidence
         prediction, confidence = predict(model, image, device)
 
         # Generate and display the heatmap
         input_img = next(iter(image))[0].unsqueeze(0).to(device)
-
-        # Clear hooks if needed
-        for layer in model.modules():
-            clear_hooks(layer)
-
-        register_hooks(model)
 
         # Generate the CAM
         heatmap = generate_cam(model, input_img)  # Assuming single image
