@@ -1,6 +1,5 @@
 from torch import nn
 
-
 class CNN(nn.Module):
     def __init__(self, num_classes):
         super().__init__()
@@ -55,12 +54,20 @@ class CNN(nn.Module):
             nn.Linear(512, num_classes),
         )
 
-    def forward(self, x):
-        output = self.layers(x)
-        return self.to_logits(output)
+        self.gradient = None
 
-    def get_activations_gradient(self):
-        return self.gradients
+    def forward(self, x, inference=False):
+        output = self.layers(x)
+        if inference:
+            output.register_hook(self.activations_hook)
+        output = self.to_logits(output)
+        return output
+    
+    def activations_hook(self, grad):
+        self.gradient = grad
+
+    def get_gradient(self):
+        return self.gradient
 
     def get_activations(self, x):
         return self.layers(x)
