@@ -212,6 +212,7 @@ def load_single_img(path, transform, size=(256, 256)):
     img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
     img = cv2.resize(img, size)
 
+    img = crop_image(img)
     img = transform(img)
     img = img.unsqueeze(0)
 
