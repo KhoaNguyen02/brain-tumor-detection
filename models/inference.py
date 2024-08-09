@@ -36,7 +36,7 @@ def predict(model, image, device):
     max_class = max(class_probabilities, key=class_probabilities.get)
     max_confidence = class_probabilities[max_class]
 
-    return max_class, max_confidence
+    return max_class, max_confidence, class_probabilities
 
 def generate_cam(model, input_data):
     """Generates class activation maps (CAM) for a given model and input data.
