@@ -24,13 +24,13 @@ class Transition(nn.Module):
     def __init__(self, in_planes, out_planes):
         super(Transition, self).__init__()
         self.conv = nn.Conv2d(in_planes, out_planes, kernel_size=1, bias=False)
-        self.cbam1 = CBAM(out_planes, 4)
-        self.bn = EvoNorm2D(in_planes)
+        self.cbam = CBAM(out_planes, 4)
+        self.bn = EvoNorm2d(in_planes)
 
     def forward(self, x):
         out = self.conv(self.bn(x))
         out = F.avg_pool2d(out, 2)
-        out = self.cbam1(out)
+        out = self.cbam(out)
         return out
 
 
@@ -69,7 +69,7 @@ class DenseNet(nn.Module):
 
     def _make_dense_layers(self, block, in_planes, nblock):
         layers = []
-        for i in range(nblock):
+        for _ in range(nblock):
             layers.append(block(in_planes, self.growth_rate))
             in_planes += self.growth_rate
         return nn.Sequential(*layers)
@@ -80,29 +80,11 @@ class DenseNet(nn.Module):
         out = self.trans2(self.dense2(out))
         out = self.trans3(self.dense3(out))
         out = self.dense4(out)
-
-        if inference:
-            out.register_hook(self.activations_hook)
-
         out = self.adaptive_pool(F.relu(self.bn(out)))
         out = out.view(out.size(0), -1)
         out = self.linear(out)
         return out
-    
-    def get_gradient(self):
-        return self.gradient
-    
-    def activations_hook(self, grad):
-        self.gradient = grad
-
-    def get_activations(self, x):
-        out = self.conv1(x)
-        out = self.trans1(self.dense1(out))
-        out = self.trans2(self.dense2(out))
-        out = self.trans3(self.dense3(out))
-        out = self.dense4(out)
-        return out
 
 
-def DenseNet121(num_classes=10):
+def DenseNet121(num_classes):
     return DenseNet(Bottleneck, [6, 12, 24, 16], growth_rate=32, num_classes=num_classes)
