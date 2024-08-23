@@ -1,68 +1,99 @@
 import torch.nn.functional as F
 import torch.nn as nn
-import math
 import torch
-from torch import nn
+from torch.nn import init
+from torch.nn.parameter import Parameter
 
 
 def instance_std(x, eps=1e-5):
-    var = torch.var(x, dim=(2, 3), keepdim=True).expand_as(x)
-    if torch.isnan(var).any():
-        var = torch.zeros(var.shape)
-    return torch.sqrt(var + eps)
-
-def group_std(x, groups=32, eps=1e-5):
     N, C, H, W = x.size()
-    x = torch.reshape(x, (N, groups, C // groups, H, W))
-    var = torch.var(x, dim=(2, 3, 4), keepdim=True).expand_as(x)
-    return torch.reshape(torch.sqrt(var + eps), (N, C, H, W))
-
-def logsumexp_2d(tensor):
-    tensor_flatten = tensor.view(tensor.size(0), tensor.size(1), -1)
-    s, _ = torch.max(tensor_flatten, dim=2, keepdim=True)
-    outputs = s + (tensor_flatten - s).exp().sum(dim=2, keepdim=True).log()
-    return outputs
+    x1 = x.reshape(N*C, -1)
+    var = x1.var(dim=-1, keepdim=True)+eps
+    return var.sqrt().reshape(N, C, 1, 1)
 
 
-class EvoNorm2D(nn.Module):
-    def __init__(
-        self, 
-        input, 
-        groups=32, 
-        non_linear=True, 
-        version="S0", 
-        affine=True, 
-        momentum=0.9, 
-        eps=1e-5, 
-        training=True
-    ):
-        super(EvoNorm2D, self).__init__()
-        self.non_linear = non_linear
-        self.version = version
-        self.training = training
+def group_std(x, groups, eps=1e-5):
+    N, C, H, W = x.size()
+    x1 = x.reshape(N, groups, -1)
+    var = (x1.var(dim=-1, keepdim=True)+eps).reshape(N, groups, -1)
+    return (x1 / var.sqrt()).reshape(N, C, H, W)
+
+
+class EvoNorm2dB0(nn.Module):
+    def __init__(self, in_channels, nonlinear=True, momentum=0.9, eps=1e-5):
+        super().__init__()
+        self.nonlinear = nonlinear
         self.momentum = momentum
-        self.groups = groups
         self.eps = eps
-        if self.version not in ["B0", "S0"]:
-            raise ValueError("Invalid EvoNorm version")
-        self.insize = input
-        self.affine = affine
-
-        if self.affine:
-            self.gamma = nn.Parameter(torch.ones(1, self.insize, 1, 1))
-            self.beta = nn.Parameter(torch.zeros(1, self.insize, 1, 1))
-            if self.non_linear:
-                self.v = nn.Parameter(torch.ones(1, self.insize, 1, 1))
-        else:
-            self.register_parameter("gamma", None)
-            self.register_parameter("beta", None)
-            self.register_buffer("v", None)
-        self.register_buffer("running_var", torch.ones(1, self.insize, 1, 1))
-
+        self.gamma = Parameter(torch.Tensor(1, in_channels, 1, 1))
+        self.beta = Parameter(torch.Tensor(1, in_channels, 1, 1))
+        if nonlinear:
+            self.v = Parameter(torch.Tensor(1, in_channels, 1, 1))
+        self.register_buffer('running_var', torch.ones(1, in_channels, 1, 1))
         self.reset_parameters()
 
     def reset_parameters(self):
-        self.running_var.fill_(1)
+        init.ones_(self.gamma)
+        init.zeros_(self.beta)
+        if self.nonlinear:
+            init.ones_(self.v)
+
+    def forward(self, x):
+        N, C, H, W = x.size()
+        if self.training:
+            x1 = x.permute(1, 0, 2, 3).reshape(C, -1)
+            var = x1.var(dim=1).reshape(1, C, 1, 1)
+            self.running_var.copy_(
+                self.momentum * self.running_var + (1 - self.momentum) * var)
+        else:
+            var = self.running_var
+        if self.nonlinear:
+            den = torch.max((var+self.eps).sqrt(),
+                            self.v * x + instance_std(x))
+            return x / den * self.gamma + self.beta
+        else:
+            return x * self.gamma + self.beta
+
+
+class EvoNorm2dS0(nn.Module):
+    def __init__(self, in_channels, groups=8, nonlinear=True):
+        super().__init__()
+        self.nonlinear = nonlinear
+        self.groups = groups
+        self.gamma = Parameter(torch.Tensor(1, in_channels, 1, 1))
+        self.beta = Parameter(torch.Tensor(1, in_channels, 1, 1))
+        if nonlinear:
+            self.v = Parameter(torch.Tensor(1, in_channels, 1, 1))
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        init.ones_(self.gamma)
+        init.zeros_(self.beta)
+        if self.nonlinear:
+            init.ones_(self.v)
+
+    def forward(self, x):
+        if self.nonlinear:
+            num = torch.sigmoid(self.v * x)
+            std = group_std(x, self.groups)
+            return num * std * self.gamma + self.beta
+        else:
+            return x * self.gamma + self.beta
+
+
+class EvoNorm2d(nn.Module):
+    def __init__(self, in_channels, groups=16, norm_type="B0", non_linear=True, momentum=0.9, eps=1e-5):
+        super().__init__()
+        self.in_channels = in_channels
+        self.groups = groups
+        if norm_type not in ["B0", "S0"]:
+            raise ValueError("Invalid EvoNorm version. Choose 'B0' or 'S0' only.")
+        self.norm_type = norm_type
+        self.non_linear = non_linear
+        self.momentum = momentum
+        self.eps = eps
+        self.evonormb0 = EvoNorm2dB0(self.in_channels, self.non_linear, self.momentum, self.eps)
+        self.evonorms0 = EvoNorm2dS0(self.in_channels, self.groups, self.non_linear)
 
     def _check_input_dim(self, x):
         if x.dim() != 4:
@@ -70,121 +101,52 @@ class EvoNorm2D(nn.Module):
 
     def forward(self, x):
         self._check_input_dim(x)
-        if self.version == "S0":
-            if self.non_linear:
-                num = x * torch.sigmoid(self.v * x)
-                return num / group_std(x, groups=self.groups,eps=self.eps) * self.gamma + self.beta
-            else:
-                return x * self.gamma + self.beta
-        if self.version == "B0":
-            if self.training:
-                var = torch.var(x, dim=(0, 2, 3), unbiased=False, keepdim=True)
-                self.running_var.mul_(self.momentum)
-                self.running_var.add_((1 - self.momentum) * var)
-            else:
-                var = self.running_var
-
-            if self.non_linear:
-                den = torch.max((var + self.eps).sqrt(), self.v * x + instance_std(x, eps=self.eps))
-                return x / den * self.gamma + self.beta
-            else:
-                return x * self.gamma + self.beta
+        if self.norm_type == "B0":
+            return self.evonormb0(x)
+        else:
+            return self.evonorms0(x)
 
 
-class BasicConv(nn.Module):
-    def __init__(self, 
-        in_planes, 
-        out_planes, 
-        kernel_size, 
-        stride=1, 
-        padding=0, 
-        dilation=1, 
-        groups=1, 
-        bias=False
-    ):
-        super(BasicConv, self).__init__()
-        self.out_channels = out_planes
-        self.conv = nn.Conv2d(in_planes, out_planes, kernel_size=kernel_size,
-                            stride=stride, padding=padding, dilation=dilation, groups=groups, bias=bias)
-        self.bn = nn.BatchNorm2d(out_planes, eps=1e-5, momentum=0.01, affine=True)
-
-    def forward(self, x):
-        x = self.conv(x)
-        x = self.bn(x)
-        return x
-
-
-class Flatten(nn.Module):
-    def forward(self, x):
-        return x.view(x.size(0), -1)
-
-
-class ChannelGate(nn.Module):
-    def __init__(self, 
-        gate_channels, 
-        reduction_ratio=16, 
-        pool_types=['avg', 'max']
-    ):
-        super(ChannelGate, self).__init__()
-        self.gate_channels = gate_channels
-        self.mlp = nn.Sequential(
-            Flatten(),
-            nn.Linear(gate_channels, gate_channels // reduction_ratio),
-            nn.ReLU(),
-            nn.Linear(gate_channels // reduction_ratio, gate_channels)
+class ChannelAttention(nn.Module):
+    def __init__(self, channel, reduction=16):
+        super(ChannelAttention, self).__init__()
+        self.avg_pool = nn.AdaptiveAvgPool2d(1)
+        self.max_pool = nn.AdaptiveMaxPool2d(1)
+        self.fc = nn.Sequential(
+            nn.Conv2d(channel, channel // reduction, 1, bias=False),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(channel // reduction, channel, 1, bias=False)
         )
-        self.pool_types = pool_types
+        self.sigmoid = nn.Sigmoid()
 
     def forward(self, x):
-        channel_att_sum = None
-        for pool_type in self.pool_types:
-            if pool_type == 'avg':
-                avg_pool = F.avg_pool2d(
-                    x, (x.size(2), x.size(3)), stride=(x.size(2), x.size(3)))
-                channel_att_raw = self.mlp(avg_pool)
-            elif pool_type == 'max':
-                max_pool = F.max_pool2d(
-                    x, (x.size(2), x.size(3)), stride=(x.size(2), x.size(3)))
-                channel_att_raw = self.mlp(max_pool)
-
-            if channel_att_sum is None:
-                channel_att_sum = channel_att_raw
-            else:
-                channel_att_sum = channel_att_sum + channel_att_raw
-
-        scale = F.sigmoid(channel_att_sum).unsqueeze(2).unsqueeze(3).expand_as(x)
-        return x * scale
+        avg_out = self.fc(self.avg_pool(x))
+        max_out = self.fc(self.max_pool(x))
+        out = avg_out + max_out
+        return x * self.sigmoid(out)
 
 
-class ChannelPool(nn.Module):
-    def forward(self, x):
-        return torch.cat((torch.max(x, 1)[0].unsqueeze(1), torch.mean(x, 1).unsqueeze(1)), dim=1)
-
-
-class SpatialGate(nn.Module):
-    def __init__(self):
-        super(SpatialGate, self).__init__()
-        kernel_size = 7
-        self.compress = ChannelPool()
-        self.spatial = BasicConv(2, 1, kernel_size, stride=1, padding=(kernel_size-1) // 2)
+class SpatialAttention(nn.Module):
+    def __init__(self, kernel_size=7):
+        super(SpatialAttention, self).__init__()
+        self.conv = nn.Conv2d(2, 1, kernel_size, padding=kernel_size//2, bias=False)
+        self.sigmoid = nn.Sigmoid()
 
     def forward(self, x):
-        x_compress = self.compress(x)
-        x_out = self.spatial(x_compress)
-        scale = F.sigmoid(x_out)
-        return x * scale
+        avg_out = torch.mean(x, dim=1, keepdim=True)
+        max_out, _ = torch.max(x, dim=1, keepdim=True)
+        out = torch.concat([avg_out, max_out], dim=1)
+        out = self.conv(out)
+        return x * self.sigmoid(out)
 
 
 class CBAM(nn.Module):
-    def __init__(self, gate_channels, reduction_ratio=16, pool_types=['avg', 'max'], no_spatial=False):
-        super(CBAM, self).__init__()
-        self.ChannelGate = ChannelGate(gate_channels, reduction_ratio, pool_types)
-        self.no_spatial = no_spatial
-        if not no_spatial:
-            self.SpatialGate = SpatialGate()
+    def __init__(self, channel, reduction=16, kernel_size=7):
+        super().__init__()
+        self.ca = ChannelAttention(channel, reduction)
+        self.sa = SpatialAttention(kernel_size)
 
     def forward(self, x):
-        x_out = self.ChannelGate(x)
-        if not self.no_spatial:
-            x_out = self.SpatialGate(x_out)
-        return x_out
+        x = self.ca(x)
+        x = self.sa(x)
+        return x
