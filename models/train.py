@@ -2,6 +2,8 @@ import time
 
 import pandas as pd
 import torch
+import torch.nn as nn
+import torch.nn.functional as F
 from tqdm import tqdm
 
 
@@ -39,6 +41,7 @@ def train_model(model, train_loader, val_loader, test_loader, device, criterion,
     """
 
     history = []
+    scaler = torch.cuda.amp.GradScaler()
 
     for epoch in range(n_epochs):
         train_loss, val_loss, train_acc, val_acc = 0.0, 0.0, 0.0, 0.0
@@ -55,8 +58,15 @@ def train_model(model, train_loader, val_loader, test_loader, device, criterion,
                 optimizer.zero_grad()
                 outputs = model(images)
                 loss = criterion(outputs, labels)
-                loss.backward()
-                optimizer.step()
+
+                # Scale Gradients
+                scaler.scale(loss).backward()
+                # Update Optimizer
+                scaler.step(optimizer)
+                scaler.update()
+
+                # loss.backward()
+                # optimizer.step()
 
                 train_loss += loss.item() * images.size(0)
 
@@ -85,6 +95,9 @@ def train_model(model, train_loader, val_loader, test_loader, device, criterion,
                 accuracy = torch.mean(correct.type(torch.FloatTensor))
                 val_acc += accuracy.item() * images.size(0)
 
+                # if scheduler is not None:
+                #     scheduler.step(val_loss)
+
             # Calculate average losses
             train_loss = train_loss / len(train_loader.dataset)
             val_loss = val_loss / len(val_loader.dataset)
@@ -97,7 +110,7 @@ def train_model(model, train_loader, val_loader, test_loader, device, criterion,
 
             # Epoch summary
             tqdm.write(
-                f'{len(train_loader)}/{len(train_loader)} [==============================] - {elapsed_time:.0f}s {1000*elapsed_time/len(train_loader):.0f}ms/step - loss: {train_loss:.4f} - accuracy: {train_acc:.4f} - val_loss: {val_loss:.4f} - val_accuracy: {val_acc:.4f}')
+                f'{len(train_loader)}/{len(train_loader)} - {elapsed_time:.0f}s {1000*elapsed_time/len(train_loader):.0f}ms/step - loss: {train_loss:.4f} - accuracy: {train_acc:.4f} - val_loss: {val_loss:.4f} - val_accuracy: {val_acc:.4f}')
 
             # Perform early stopping
             if early_stopping:
@@ -112,7 +125,7 @@ def train_model(model, train_loader, val_loader, test_loader, device, criterion,
                     return model, history, test_acc
 
         if scheduler is not None:
-            scheduler.step(val_loss)
+            scheduler.step()
 
     history = pd.DataFrame(
         history, columns=['train_loss', 'val_loss', 'train_acc', 'val_acc'])
@@ -183,3 +196,22 @@ class EarlyStopping:
 
     def load_best_model(self, model):
         model.load_state_dict(self.best_model)
+
+
+class FocalLoss(nn.Module):
+    def __init__(self, gamma: float = 2.0, weight=None, reduction: str = 'mean') -> None:
+        super().__init__()
+        self.gamma = gamma
+        self.weight = weight
+        self.reduction = reduction
+
+    def forward(self, inp: torch.Tensor, targ: torch.Tensor):
+        ce_loss = F.cross_entropy(
+            inp, targ, weight=self.weight, reduction="none")
+        p_t = torch.exp(-ce_loss)
+        loss = (1 - p_t)**self.gamma * ce_loss
+        if self.reduction == "mean":
+            loss = loss.mean()
+        elif self.reduction == "sum":
+            loss = loss.sum()
+        return loss
