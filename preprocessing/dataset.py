@@ -3,13 +3,12 @@ import os
 import cv2
 import matplotlib.pyplot as plt
 import numpy as np
-import torch
 from huggingface_hub import snapshot_download
 from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader, Dataset
 
 
-def load_data(size=(256, 256), seed=None, download=False):
+def load_data(size=(512, 512), seed=None, download=False):
     """Load raw images and labels from dataset without preprocessing.
 
     Parameters
@@ -26,12 +25,13 @@ def load_data(size=(256, 256), seed=None, download=False):
     # Check if dataset is available
     path = 'dataset'
 
-    assert download or os.path.exists(path), "Dataset not found. Set download=True to download the dataset."
+    assert download or os.path.exists(
+        path), "Dataset not found. Set download=True to download the dataset."
 
     # If dataset is not available, download it
     if download:
         os.makedirs(path, exist_ok=True)
-        snapshot_download(repo_id="Simezu/brain-tumour-MRI-scan", repo_type="dataset", allow_patterns="*.jpg", 
+        snapshot_download(repo_id="Simezu/brain-tumour-MRI-scan", repo_type="dataset", allow_patterns="*.jpg",
                         local_dir=path, etag_timeout=60)
 
     # Get path of training and testing data
@@ -63,10 +63,13 @@ def load_data(size=(256, 256), seed=None, download=False):
     X = np.array(X)
     y = np.array(y)
 
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=seed)
-    X_train, X_val, y_train, y_val = train_test_split(X_train, y_train, test_size=0.1, random_state=seed)
-    
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.2, random_state=seed)
+    X_train, X_val, y_train, y_val = train_test_split(
+        X_train, y_train, test_size=0.1, random_state=seed)
+
     return (X_train, y_train), (X_val, y_val), (X_test, y_test)
+
 
 def crop_image(img, verbose=False):
     """Crop image based on extreme points.
@@ -94,7 +97,8 @@ def crop_image(img, verbose=False):
     thresh = cv2.dilate(thresh, None, iterations=2)
 
     # Find contours
-    contours = cv2.findContours(thresh.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    contours = cv2.findContours(
+        thresh.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     contours = contours[0] if len(contours) == 2 else contours[1]
     max_countours = max(contours, key=cv2.contourArea)
 
@@ -109,7 +113,8 @@ def crop_image(img, verbose=False):
 
     # Plot the process of cropping, if verbose is True
     if verbose:
-        image_countour = cv2.drawContours(img.copy(), [max_countours], -1, (0, 255, 255), 4)
+        image_countour = cv2.drawContours(
+            img.copy(), [max_countours], -1, (0, 255, 255), 4)
         points = cv2.circle(image_countour.copy(), left, 8, (0, 0, 255), -1)
         points = cv2.circle(points, right, 8, (0, 255, 0), -1)
         points = cv2.circle(points, top, 8, (255, 0, 0), -1)
@@ -127,6 +132,7 @@ def crop_image(img, verbose=False):
         plt.show()
 
     return cropped_image
+
 
 def get_dataloader(train_data, val_data, test_data, batch_size=32, train_transform=None, test_transform=None, device='cpu'):
     """Get dataloader for training and testing.
@@ -154,13 +160,19 @@ def get_dataloader(train_data, val_data, test_data, batch_size=32, train_transfo
         Training dataloader, validation dataloader, testing dataloader
     """
 
-    train_dataset = BrainTumorDataset(*train_data, transform=train_transform, device=device)
-    val_dataset = BrainTumorDataset(*val_data, transform=test_transform, device=device)
-    test_dataset = BrainTumorDataset(*test_data, transform=test_transform, device=device)
+    train_dataset = BrainTumorDataset(
+        *train_data, transform=train_transform, device=device)
+    val_dataset = BrainTumorDataset(
+        *val_data, transform=test_transform, device=device)
+    test_dataset = BrainTumorDataset(
+        *test_data, transform=test_transform, device=device)
 
-    train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-    val_dataloader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
-    test_dataloader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+    train_dataloader = DataLoader(
+        train_dataset, batch_size=batch_size, shuffle=True, num_workers=8, pin_memory=True)
+    val_dataloader = DataLoader(
+        val_dataset, batch_size=batch_size, shuffle=False, num_workers=8, pin_memory=True)
+    test_dataloader = DataLoader(
+        test_dataset, batch_size=batch_size, shuffle=False, num_workers=8, pin_memory=True)
 
     return train_dataloader, val_dataloader, test_dataloader
 
@@ -182,16 +194,14 @@ class BrainTumorDataset(Dataset):
         image = self.images[idx]
         label = self.labels[idx]
         label = self.label_dict[label]
-
+        image = crop_image(image)
         if self.transform:
             image = self.transform(image)
 
-        image.permute(2, 0, 1)
-
-        return image.to(self.device), torch.tensor(label).to(self.device)
+        return image, label
 
 
-def load_single_img(path, transform, size=(256, 256)):
+def load_single_img(path, transform):
     """Load a single image from path
 
     Parameters
@@ -210,7 +220,6 @@ def load_single_img(path, transform, size=(256, 256)):
     """
     img = cv2.imread(path)
     img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-    img = cv2.resize(img, size)
 
     img = crop_image(img)
     img = transform(img)
