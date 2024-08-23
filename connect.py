@@ -1,34 +1,71 @@
-import torch
-from torchvision import transforms
-from models import DenseNet121
+from config import *
+from training import *
 from preprocessing import load_single_img
-from models.inference import predict
-
-MODEL = "pretrained/model_densenet.pth"
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
-def load_model():
-    model = DenseNet121(num_classes=4).to(device)
-    model.load_state_dict(torch.load(MODEL, map_location=device))
+def get_model(model_name):
+    if model_name == "CNN":
+        _, model = load_model("CNN", get_model=True, device=device)
+        config = CNNConfig(model)
+    elif model_name == "DenseNet":
+        _, model = load_model("DenseNet", get_model=True, device=device)
+        config = DenseNetConfig(model)
+    elif model_name == "ResNet":
+        _, model = load_model("ResNet", get_model=True, device=device)
+        config = ResNetConfig(model)
+    elif model_name == "Auto":
+        # Load all three models
+        _, cnn = load_model("CNN", get_model=True, device=device)
+        _, densenet = load_model("DenseNet", get_model=True, device=device)
+        _, resnet = load_model("ResNet", get_model=True, device=device)
+        models = {"CNN": cnn.eval(), "DenseNet": densenet.eval(), "ResNet": resnet.eval()}
+        configs = {"CNN": CNNConfig(cnn), "DenseNet": DenseNetConfig(
+            densenet), "ResNet": ResNetConfig(resnet)}
+        return models, configs
+    else:
+        raise ValueError(f"Model {model_name} not recognized.")
     model.eval()
-    return model
+    return model, config
 
 
-def get_transform():
-    return transforms.Compose([
-        transforms.ToPILImage(),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-    ])
-
-
-def process_image(uploaded_file, transform):
+def process_image(uploaded_file):
     with open("temp/uploaded_img.jpg", "wb") as f:
         f.write(uploaded_file.getbuffer())
-    image = load_single_img("temp/uploaded_img.jpg", transform=transform)
-    return image
+    return "temp/uploaded_img.jpg"
 
 
-def predict_image(model, image, device):
-    return predict(model, image, device)
+def predict_image(model, config, image_path, device):
+    if isinstance(model, dict):  # If using "Auto" model with multiple models
+        # Define weights for each model
+        model_weights = {
+            "CNN": 0.35,    # Adjust these weights as needed
+            "DenseNet": 0.35,
+            "ResNet": 0.3
+        }
+
+        combined_probs = {}
+        for model_name, m in model.items():
+            image = load_single_img(image_path, transform=config[model_name].test_transform)
+            _, _, class_probs = predict(m, image, device)
+
+            for condition, prob in class_probs.items():
+                if condition not in combined_probs:
+                    combined_probs[condition] = 0
+                combined_probs[condition] += model_weights[model_name] * prob
+
+        # Normalize the weighted probabilities
+        total_prob = sum(combined_probs.values())
+        normalized_probs = {condition: (prob / total_prob)
+                            for condition, prob in combined_probs.items()}
+
+        # Determine the highest probability and corresponding prediction
+        final_prediction = max(normalized_probs, key=normalized_probs.get)
+
+        # Convert to percentage
+        final_confidence = normalized_probs[final_prediction] * 100
+        normalized_probs = {k: v * 100 for k, v in normalized_probs.items()}
+        return final_prediction, final_confidence, normalized_probs
+    else:
+        # Single model scenario
+        image = load_single_img(image_path, transform=config.test_transform)
+        return predict(model, image, device)
