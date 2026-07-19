@@ -1,37 +1,71 @@
+import cv2
+import numpy as np
 import torch
-import torch.nn.functional as F
 
 
-def predict(model, image, device):
-    """Get prediction and confidence level of a single image using a trained model.
+def largest_component_bbox(mask, min_area_fraction=0.001):
+    h, w = mask.shape
+    num_labels, _, stats, _ = cv2.connectedComponentsWithStats(mask.astype(np.uint8), connectivity=8)
+    if num_labels <= 1:
+        return None
 
-    Parameters
-    ----------
-    model : torch.nn.Module
-        Trained model to use for prediction
-    image : torch.Tensor
-        The image tensor to be predicted
-    device : torch.device
-        Device to run the model on (CPU or GPU)
+    areas = stats[1:, cv2.CC_STAT_AREA]
+    best = int(np.argmax(areas))
+    if areas[best] < min_area_fraction * mask.size:
+        return None
 
-    Returns
-    -------
-    tuple
-        Prediction for the image and confidence level in percentage
-    """
-    model.eval()
-    with torch.no_grad():
-        image = next(iter(image)).to(device)
-        output = model(image)
-        probabilities = F.softmax(output, dim=1).cpu().numpy().flatten()
+    x, y, bw, bh, _ = stats[best + 1]
+    return (x / w, y / h, (x + bw) / w, (y + bh) / h)
 
-    pred_dict = {0: 'Normal', 1: 'Glioma', 2: 'Meningioma', 3: 'Pituitary'}
 
-    # Create a dictionary of class probabilities
-    class_probabilities = {pred_dict[i]: prob *100 for i, prob in enumerate(probabilities)}
+@torch.no_grad()
+def predict(classifier, segmenter, image, classifier_config, segmenter_config, class_names, device):
+    classifier.eval()
+    clf_tensor = classifier_config.test_transform(image=image)['image'].unsqueeze(0).to(device)
+    class_logits = classifier(clf_tensor)
 
-    # Get the highest confidence prediction
-    max_class = max(class_probabilities, key=class_probabilities.get)
-    max_confidence = class_probabilities[max_class]
+    class_probs = torch.softmax(class_logits, dim=-1)[0].cpu().numpy()
+    class_idx = int(class_probs.argmax())
+    confidence = float(class_probs[class_idx])
 
-    return max_class, max_confidence, class_probabilities
+    result = {
+        'class_idx': class_idx,
+        'confidence': confidence,
+        'class_probs': class_probs,
+        'mask': None,
+        'box': None,
+    }
+
+    if class_names[class_idx] == 'no_tumor':
+        return result
+
+    segmenter.eval()
+    seg_tensor = segmenter_config.test_transform(image=image)['image'].unsqueeze(0).to(device)
+    seg_logits = segmenter(seg_tensor)
+
+    mask_prob = torch.sigmoid(seg_logits)[0, 0].cpu().numpy()
+    mask = (mask_prob > segmenter_config.seg_threshold).astype(np.uint8)
+    box = largest_component_bbox(mask, min_area_fraction=segmenter_config.min_tumor_area_fraction)
+
+    result['mask'] = mask
+    result['box'] = box
+    return result
+
+
+def draw_segmentation(image, result, class_names):
+    if result['box'] is None:
+        return image.copy()
+
+    h, w = image.shape[:2]
+    mask_resized = cv2.resize(result['mask'], (w, h), interpolation=cv2.INTER_NEAREST)
+    color = (255, 71, 87)
+
+    overlay = image.copy()
+    overlay[mask_resized > 0] = color
+    blended = cv2.addWeighted(overlay, 0.35, image, 0.65, 0)
+
+    x1n, y1n, x2n, y2n = result['box']
+    x1, y1, x2, y2 = int(x1n * w), int(y1n * h), int(x2n * w), int(y2n * h)
+    cv2.rectangle(blended, (x1, y1), (x2, y2), color, 2)
+
+    return blended
