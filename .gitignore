@@ -164,4 +164,5 @@ cython_debug/
 .DS_Store
 **/.DS_Store
 
-dataset/
+brisc2025/
+temp/
