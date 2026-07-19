@@ -1,10 +1,26 @@
-# Brain Tumor Detection
+---
+title: Brain Tumor Detection
+emoji: 🧠
+colorFrom: blue
+colorTo: purple
+sdk: streamlit
+sdk_version: "1.37.0"
+app_file: app.py
+pinned: false
+---
+
+# Brain Tumor Segmentation & Classification
 
 ## Overview
-This project aims to implement a complete pipeline to scan through MRI images to detect and segment different types of tumors including:
+This app runs a two-stage pipeline on a single MRI slice: it first classifies the
+scan as one of
 - **Glioma**
 - **Meningioma**
 - **Pituitary Tumor**
+- **No Tumor**
+
+and, only if a tumor is detected, segments it pixel-by-pixel and draws its
+bounding box.
 
 > [!WARNING]
 >
@@ -16,11 +32,14 @@ This project aims to implement a complete pipeline to scan through MRI images to
 
 ## Model
 - **Classifier** (`models/classifier.py`): `ConvNext`, a from-scratch ConvNeXt-Tiny implementation, predicts one of the four classes above from the full MRI slice.
-- **Segmenter** (`models/unet.py`): `AttentionUNet`, a from-scratch Attention U-Net, predicts a tumor mask. It only runs on scans the classifier labels as a tumor type.
+- **Segmenter** (`models/unet.py`): `AttentionUNet`, a from-scratch Attention U-Net, predicts a per-pixel tumor mask. It only runs on scans the classifier labels as a tumor type.
 
-Some convolution layers in both models use decorrelation (`DecorConv2d`,
-`models/decor.py`) instead of plain `Conv2d`, which decorrelates a layer's
-input to counteract the way correlated inputs ruin gradient descent.
+Select layers in both models use decorrelated backpropagation (`models/decor.py`,
+`DecorConv2d`/`DecorLinear`) rather than plain `Conv2d`/`Linear`, which decorrelates
+a layer's input on the fly to counteract the way correlated inputs skew gradient
+descent. Placement is chosen per-layer based on how well-conditioned that layer's
+online correlation estimate is (a function of batch size and spatial resolution at
+that layer), not applied uniformly.
 
 At inference (`models/inference.py`), the segmenter's predicted mask's largest
 connected component gives the bounding box shown in the UI.
@@ -35,6 +54,12 @@ brisc2025/
 ├─ classification_task/{train,test}/{glioma,meningioma,pituitary,no_tumor}/*.jpg
 └─ segmentation_task/{train,test}/{images/*.jpg, masks/*.png}
 ```
+
+`preprocessing/dataset.py` builds classification samples from `classification_task`
+(all four classes) and segmentation samples from `segmentation_task` (tumor
+scans only, since `no_tumor` scans have no mask and are never passed to the
+segmenter). BRISC2025 ships its own stratified train/test split, which is used
+as-is; a stratified validation slice is carved out of the train split.
 
 ## Installation
 
@@ -54,7 +79,9 @@ python training.py
 ```
 
 Trains `ConvNext` and `AttentionUNet` in sequence, saving weights and history to
-`pretrained/Classifier/` and `pretrained/Segmenter/` respectively.
+`pretrained/Classifier/` and `pretrained/Segmenter/` respectively. See
+`train_colab.ipynb` for a Colab-ready version (GPU runtime, Drive-backed
+checkpoints, `kagglehub` dataset download).
 
 ## Running the demo
 
@@ -62,6 +89,6 @@ Trains `ConvNext` and `AttentionUNet` in sequence, saving weights and history to
 streamlit run app.py
 ```
 
-Upload an MRI image; the model classifies it and, if a tumor is present, overlays
+Upload an MRI image; the app classifies it and, if a tumor is present, overlays
 the segmented region on the original scan along with its bounding box, type, and
 confidence.
