@@ -9,6 +9,7 @@ from connect import get_models, process_image, run_pipeline
 ACCENT = "#4361EE"
 DANGER = "#E63946"
 SUCCESS = "#2A9D8F"
+WARNING = "#F4A261"
 
 
 def inject_css():
@@ -50,6 +51,7 @@ def inject_css():
         }
         .badge-danger { background: rgba(230, 57, 70, 0.14); color: #E63946; }
         .badge-success { background: rgba(42, 157, 143, 0.14); color: #2A9D8F; }
+        .badge-warning { background: rgba(244, 162, 97, 0.16); color: #F4A261; }
 
         .prob-row { display: flex; align-items: center; gap: 0.7rem; margin-bottom: 0.6rem; }
         .prob-label { min-width: 108px; font-size: 0.87rem; font-weight: 600; }
@@ -122,23 +124,32 @@ def render_sidebar():
         st.caption("© 2026 Nguyen Anh Khoa. All Rights Reserved.")
 
 
-def render_probability_bars(class_probs, predicted_idx):
-    order = sorted(range(len(CLASS_NAMES)), key=lambda i: class_probs[i], reverse=True)
-    rows = "".join(
-        f"""
+def render_probability_bars(class_probs, predicted_idx, ambiguous=False, unknown_prob=0.0):
+    entries = list(zip(CLASS_NAMES, class_probs))
+    if ambiguous:
+        entries.append(('unknown other type', unknown_prob))
+
+    order = sorted(range(len(entries)), key=lambda i: entries[i][1], reverse=True)
+    rows = []
+    for i in order:
+        label, prob = entries[i]
+        if ambiguous and label == 'Unknown Other Type':
+            color, opacity = WARNING, 1.0
+        elif i == predicted_idx:
+            color, opacity = DANGER, 1.0
+        else:
+            color, opacity = ACCENT, 0.55
+        rows.append(f"""
         <div class="prob-row">
-            <div class="prob-label">{CLASS_NAMES[i]}</div>
+            <div class="prob-label">{label}</div>
             <div class="prob-track">
-                <div class="prob-fill" style="width:{class_probs[i] * 100:.1f}%;
-                    background:{DANGER if i == predicted_idx else ACCENT};
-                    opacity:{1.0 if i == predicted_idx else 0.55};"></div>
+                <div class="prob-fill" style="width:{prob * 100:.1f}%;
+                    background:{color}; opacity:{opacity};"></div>
             </div>
-            <div class="prob-pct">{class_probs[i] * 100:.1f}%</div>
+            <div class="prob-pct">{prob * 100:.1f}%</div>
         </div>
-        """
-        for i in order
-    )
-    st.markdown(rows, unsafe_allow_html=True)
+        """)
+    st.markdown("".join(rows), unsafe_allow_html=True)
 
 
 def render_results(annotated, result):
@@ -153,6 +164,10 @@ def render_results(annotated, result):
                 st.markdown(
                     '<span class="result-badge badge-success">✅ Healthy</span>',
                     unsafe_allow_html=True)
+            elif result['class_idx'] is None:
+                st.markdown(
+                    '<span class="result-badge badge-warning">❓ Unknown Other Type</span>',
+                    unsafe_allow_html=True)
             else:
                 name = CLASS_NAMES[result['class_idx']]
                 st.markdown(
@@ -161,7 +176,9 @@ def render_results(annotated, result):
                 st.metric("Confidence", f"{result['confidence'] * 100:.1f}%")
 
             st.markdown("**Probability Breakdown**")
-            render_probability_bars(result['class_probs'], result['class_idx'])
+            render_probability_bars(
+                result['class_probs'], result['class_idx'],
+                ambiguous=result['ambiguous'], unknown_prob=result['unknown_prob'])
 
 
 def main():
