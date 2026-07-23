@@ -28,17 +28,6 @@ def predict(classifier, segmenter, image, classifier_config, segmenter_config, c
     class_idx = int(class_probs.argmax())
     confidence = float(class_probs[class_idx])
 
-    result = {
-        'class_idx': class_idx,
-        'confidence': confidence,
-        'class_probs': class_probs,
-        'mask': None,
-        'box': None,
-    }
-
-    if class_names[class_idx] == 'no_tumor':
-        return result
-
     segmenter.eval()
     seg_tensor = segmenter_config.test_transform(image=image)['image'].unsqueeze(0).to(device)
     seg_logits = segmenter(seg_tensor)
@@ -47,9 +36,30 @@ def predict(classifier, segmenter, image, classifier_config, segmenter_config, c
     mask = (mask_prob > segmenter_config.seg_threshold).astype(np.uint8)
     box = largest_component_bbox(mask, min_area_fraction=segmenter_config.min_tumor_area_fraction)
 
-    result['mask'] = mask
-    result['box'] = box
-    return result
+    healthy_idx = class_names.index('healthy')
+    ambiguous = False
+    unknown_prob = 0.0
+    if box is not None and class_idx == healthy_idx and confidence < 1.0:
+        unknown_prob = float(class_probs[healthy_idx])
+        class_probs = class_probs.copy()
+        class_probs[healthy_idx] = 0.0
+
+        class_idx = None
+        confidence = None
+        ambiguous = True
+    elif class_idx == healthy_idx:
+        box = None
+        mask = None
+
+    return {
+        'class_idx': class_idx,
+        'confidence': confidence,
+        'class_probs': class_probs,
+        'unknown_prob': unknown_prob,
+        'mask': mask,
+        'box': box,
+        'ambiguous': ambiguous,
+    }
 
 
 def draw_segmentation(image, result, class_names):
