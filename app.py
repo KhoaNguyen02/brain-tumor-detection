@@ -133,7 +133,7 @@ def render_probability_bars(class_probs, predicted_idx, ambiguous=False, unknown
     rows = []
     for i in order:
         label, prob = entries[i]
-        if ambiguous and label == 'Unknown Other Type':
+        if ambiguous and label == 'unknown other type':
             color, opacity = WARNING, 1.0
         elif i == predicted_idx:
             color, opacity = DANGER, 1.0
